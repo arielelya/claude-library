@@ -19,7 +19,7 @@ Skills useful in any project. Source: [anthropics/skills](https://github.com/ant
 | Project | Contents |
 |---|---|
 | shilman-cash-flow | `CLAUDE.md` (latest version from ~/Developer) and `scripts/supabase_sql.py`. Skills: `deploy`, `db-change`, `cloudflare`, `wrangler`, `workers-best-practices`, `web-design-guidelines`, `agents-sdk`, `cloudflare-email-service`, `cloudflare-one`, `cloudflare-one-migrations`, `durable-objects`, `nextjs-on-cloudflare`, `sandbox-sdk`, `sandbox-next`, `sandbox-stable`, `sandbox-migrate-to-next`, `turnstile-spin`, `web-perf`, plus the Emil Kowalski design pack (`animate`, `animate-expo`, `animation-performance`, `animation-vocabulary`, `apple-design`, `ask-emil`, `ask-sonner`, `break-ui`, `choreograph`, `emil-design-eng`, `find-animation-opportunities`, `gestures`, `improve-animations`, `learn-taste`, `mobile-native`, `pick-ui-library`, `prototype`, `remove-animations`, `review-animations`, `write-swift`) |
-| vele | `CLAUDE.md` for the VELE Shopify website (velewellness.com), copied from ~/Documents/VELE Website. `docs/` (Shopify ideas and settings checklist), `dashboard/README.md`. Computer folder: ~/Documents/VELE Website |
+| vele | `CLAUDE.md` for the VELE Shopify website (velewellness.com), copied from ~/Desktop/VELE/Website. `docs/` (Shopify ideas and settings checklist), `dashboard/README.md`. Computer folder: ~/Documents/VELE Website |
 
 Notes:
 - `cloudflare`, `wrangler`, `workers-best-practices`, `web-design-guidelines` and the other Cloudflare skills are public skill packs (Cloudflare, vercel-labs/agent-skills), currently used only in Cash Flow.
