@@ -3,7 +3,17 @@
 Index of skills and context files. See `CLAUDE.md` for how this repo is used.
 
 ## global/skills
-Empty for now. Skills that are useful in any project go here.
+Skills useful in any project. Source: [anthropics/skills](https://github.com/anthropics/skills) (Apache 2.0, license files included).
+
+| Skill | Use for |
+|---|---|
+| skill-creator | Building, editing and evaluating skills |
+| docx | Word documents |
+| pdf | PDF files |
+| pptx | PowerPoint presentations |
+| xlsx | Excel spreadsheets |
+| frontend-design | Distinctive, non-generic UI design |
+| webapp-testing | Browser automation tests and screenshots (Playwright) |
 
 ## projects
 | Project | Contents |
