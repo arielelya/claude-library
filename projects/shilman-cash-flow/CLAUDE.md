@@ -24,7 +24,6 @@ The product is designed for individuals and households who want a simple way to 
 - where money goes,
 - whether they are staying within budget,
 - how their month is progressing,
-- what recurring expenses are coming,
 - whether they are moving toward savings goals,
 - and how their overall financial position changes over time.
 
@@ -98,11 +97,11 @@ The application is organized around six primary areas:
 | Route | Hebrew label | Purpose |
 |---|---|---|
 | `/dashboard` | דאשבורד | Monthly overview of income, expenses, net cash flow, recent activity, goals, investments and market indexes |
-| `/budget` | הוצאות | Monthly budget / expense management, planned vs actual, carryover, categories, transactions and recurring transactions |
+| `/budget` | תזרים | Monthly budget / expense management, planned vs actual, carryover, categories and transactions. Labelled תזרים because it carries income as well as expenses, and has to read true in tracking mode where nothing is planned |
 | `/goals` | מטרות | Savings goals, milestones, progress and due-date awareness |
 | `/investments` | השקעות | Investment portfolios and value history |
 | `/annual-summary` | סיכום שנתי | Annual financial summary, monthly trends, categories and year-over-year comparison |
-| `/settings` | הגדרות | User profile, currency, operating mode, theme, password and account management |
+| `/settings` | הגדרות | User profile, operating mode, theme, password and account management |
 
 Additional flows include:
 
@@ -162,7 +161,26 @@ Several screens change their labels and content depending on this value.
 
 In tracking mode new months are created without a plan, so nothing carries in the background, and no screen shows budget information.
 
-Switching modes goes through the `set_budget_mode` RPC. It is idempotent, never touches transactions or the current month's plans, and re-derives the months after the current month: no plan in tracking mode, the current month's plan in budget mode. Returning to budget mode after a tracking period starts clean, because the tracking months have no plan.
+Switching modes goes through the `set_budget_mode` RPC. It is idempotent, never touches
+transactions, and re-derives the months after the current month: no plan in tracking mode,
+the current month's plan in budget mode.
+
+Switching **off** leaves the current month exactly as it is, so switching straight back on
+loses nothing.
+
+Switching **on** fills the current month where it has *no* plan, from the last month that
+had one, else `categories.planned_amount`. A plan the user already set is never
+overwritten. Without this a user coming back from a tracking period landed in budget mode
+with nothing planned and no way to fix it, because `set_category_plan` refuses a past month
+that has no plan (fixed in `20260918110350_budget_mode_restore_plans.sql`).
+
+`create_budgets_with_carryover` seeds a new month from the last month **that has a plan**,
+not simply the last month. Seeding from the last month whatever it held meant one tracking
+period made every later month inherit `NULL` forever.
+
+Carryover is unaffected by either: `recalculate_budget_chain` still breaks the chain at a
+month without a plan, so the first restored month starts at carry 0 rather than inheriting
+a stale balance from before the tracking period.
 
 ---
 
@@ -200,10 +218,10 @@ It includes:
 - actual spending,
 - carryover,
 - transaction management,
-- recurring transactions,
 - category drill-down,
-- search,
-- CSV export.
+- search.
+
+CSV export and category management are reached from Settings, not from here.
 
 This area should make it easy to understand:
 
@@ -222,9 +240,48 @@ Savings goals include:
 - progress,
 - achieved / active states.
 
-Contributions are capped at the goal target.
+There is no way to add money to a goal directly. `contributeToGoal` was the only thing
+that wrote `goals.current_amount` by hand, no screen ever called it, and the value would
+not have survived the next milestone edit anyway; it was deleted on 2026-09-19. Progress
+moves through the milestones and nowhere else.
 
-Milestones can update overall goal progress through database triggers.
+A milestone carries **two** figures: `amount`, its target, and `saved_amount`, the money
+already put toward it (added 2026-10-02). `saved_amount` has no date of its own - the
+point is that the money exists, not when it arrived - and the goals screen shows the pair
+as `6,000/25,000` on any milestone that is not yet complete, smaller figure first.
+
+**The column name is narrower than the meaning.** A goal is not always a savings pot: it
+is often something being paid off in instalments, an apartment or a car, so the user-facing
+label is **"עד כה"** and not "נחסך". Do not reintroduce saving-specific copy for this
+field, here or in `EditGoalModal`. The column keeps its name because renaming it would
+cost a migration for no behaviour.
+
+The pair is rendered inside a `dir="ltr"` span, not by DOM order. The figures are LTR runs
+on an RTL line, so without an explicit direction the smaller one lands to the right of the
+slash, which is not how a fraction reads.
+
+`goals.current_amount` is derived: the `update_goal_progress_on_milestone_change` trigger
+recalculates it on every milestone insert, update or delete, as the sum of **completed
+milestones at their full `amount` plus `LEAST(saved_amount, amount)` for the ones still
+open**. Before 2026-10-02 it counted completed milestones only, so a user six months into
+a 50,000 milestone saw no progress at all while real money accumulated. The `LEAST` caps
+each milestone's contribution at its own target, so a partial figure larger than the
+milestone cannot inflate the goal; the column itself is only constrained to be
+non-negative, because lowering a milestone's `amount` below money already saved must not
+fail with a constraint error. The client caps it too, in `saveEditMilestone`, and says so
+rather than clamping silently.
+
+Everything that reads `current_amount` moved with it: the progress bar, the dashboard goal
+summary, and the monthly "יש לחסוך" figure, which gets smaller because the gap is smaller.
+
+`goals.done` is **only ever set by the user**, through `markGoalAsDone`. The trigger used
+to flip it to true once the milestone sum reached the target, and only ever in that
+direction, so the client reset it to false after every milestone edit. That guard did more
+harm than good: it ran on any milestone change including a rename, so editing a milestone
+on a goal the user had marked finished silently un-finished it, while `deleteMilestone` had
+no such reset and could leave a goal auto-marked. Both the auto-set and the guard were
+removed on 2026-09-18 (`20260918111100_goals_no_autocomplete.sql`). Reaching the target
+amount is not the same as deciding the goal is finished.
 
 The goal experience should feel motivating but financially grounded.
 
@@ -232,9 +289,14 @@ The goal experience should feel motivating but financially grounded.
 
 ## Investments
 
-Users can create named investment portfolios.
+Users can create named investment portfolios. A name is unique per user, and a portfolio
+holds at most one value reading per day, so a chart never has to pick between two readings
+for the same date. `InvestmentsContext.investmentErrorMessage` turns either violation into
+a Hebrew message.
 
-Each portfolio contains a time series of value entries.
+Each portfolio contains a time series of value entries. `amount` is the portfolio's value
+at that date; `flow` is external money moved in or out (negative is a withdrawal), which is
+what separates a deposit from a gain.
 
 The app derives:
 
@@ -251,66 +313,77 @@ Investment values may be positive, zero, or negative.
 
 ## Annual Summary
 
-The annual summary provides a higher-level view using:
+The annual summary provides a higher-level view. It is computed on request by:
 
 ```text
-yearly_summaries
+get_yearly_summary(p_year)
+get_transaction_years()
 ```
 
-It includes:
+Both aggregate out of `transactions` and run as the caller, so RLS decides what they
+return. Nothing about a year is stored (see Data Model).
 
-- monthly income,
-- monthly expenses,
-- expenses by category,
-- year-over-year comparisons,
-- Hebrew observations.
+The screen opens on the most recent year `get_transaction_years` reports, not on the current
+calendar year, and only on the first load that returns one, so it never overrides a year the
+user picked. It opened on the current year regardless, which landed an account last used in
+2024 on "אין נתונים לשנת 2026" with no hint of where its own data was.
 
-The observations are currently rule-based, not generated by AI.
+The screen carries four cards, in this order:
+
+1. **תוצאה נטו** - the net result, the comparison to the same months of the previous year,
+   and a strip of six figures: income, expenses, savings rate, leading category, and the
+   peak income and expense months. Under the headline sits the period every figure covers.
+2. **מגמות חודשיות** - income and expenses across the counted months. The expense line is
+   dashed as well as orange, because green and orange is the pair protanopes struggle with.
+   The y axis runs from zero, like every other money axis in the app. Fitting it to the data
+   instead drew a steady year's two lines pinned to opposite edges of the plot, which made a
+   22% gap read as the whole chart; a transaction is `CHECK (amount > 0)`, so a zero floor
+   can never clip a month.
+3. **תובנות שנתיות** - rule-based Hebrew observations, plus a full-year projection for a
+   year still in progress. Every threshold scales with the length of the period.
+4. **לאן הכסף הלך** - the five largest categories as ranked bars, each with its year total,
+   its share, **what it cost in an average month**, and a sparkline of its counted months.
+   The rest collapse into one "כל השאר" row that expands. Tapping a category opens its
+   month-by-month breakdown.
+
+A year whose every transaction sits in the month still running has no counted month yet, and
+says when it will: the month after the one those transactions are in. That is February only
+when the year's first transaction is in January, and the screen named February regardless,
+which told every account opened mid-year to come back months later than it had to.
+
+This replaced a category donut on 2026-09-24. In RTL, on a phone, with a real household's
+category list, a circle turns the long tail into unlabelled slivers and needs a legend,
+while a bar carries its own label and sorts itself. The monthly average and the sparkline
+are the two things a year view can say that a month view cannot: what a category really
+costs, and whether it grew all year or had one expensive month.
+
+The Hebrew observations are rule-based, not generated by AI. An AI version was costed and
+deferred on 2026-09-24: the design that would work computes every number in code and lets
+the model only select and phrase, because a wrong figure in this product costs more than a
+dull one.
 
 ---
 
 # Financial Insights
 
-The application contains rule-based financial insights through:
+**`useFinancialInsights` no longer exists.** It was deleted on 2026-09-18 with the other
+dormant components, and this section still described it as present, which contradicted the
+Dormant Components section further down. Its source is in git history.
 
-```text
-useFinancialInsights
-```
-
-These compare current and previous periods and produce Hebrew messages.
-
-Insight types include:
-
-- positive,
-- warning,
-- suggestion,
-- achievement.
-
-They are prioritized for display.
-
-There is currently no AI involved in this feature.
+The only rule-based insights in the product are the ones the annual summary generates for
+itself. No AI is involved in any of them.
 
 ---
 
 # Recurring Transactions
 
-Recurring transactions are generated lazily.
+**Removed on 2026-09-18.** The feature was dormant for months: the UI was hidden, production
+never held a template, and signed-in users could not execute the generator. The
+`recurring_transactions` table, `transactions.recurring_id` and all related triggers, functions
+and client code were deleted (`20260918100000_drop_recurring_transactions.sql`).
 
-Creating a recurring transaction only materializes the current month.
-
-Future months are generated when the user opens them through:
-
-```text
-generate_recurring_transactions_for_month
-```
-
-Generated transaction rows contain:
-
-```text
-recurring_id
-```
-
-and database rules prevent direct editing of generated rows.
+Do not reintroduce a `recurring_id` reference without also restoring the generator's privileges
+and the rule that blocked editing generated rows.
 
 ---
 
@@ -334,27 +407,14 @@ This is currently the application's only external market-data source.
 
 # Currency
 
-Supported display currencies:
+Cash Flow is **shekels only**.
 
-- ILS - ₪
-- USD - $
-- EUR - €
+`profiles.currency` was removed on 2026-09-18. It let a user pick USD or EUR, but no FX
+conversion ever ran: the symbol changed and the amounts stayed shekels, so a user on USD
+was shown wrong figures.
 
-ILS is the default.
-
-Currency is stored in:
-
-```text
-profiles.currency
-```
-
-This is **display-only multi-currency**.
-
-There is no FX conversion.
-
-Amounts remain the values entered by the user.
-
-Changing currency changes formatting and symbols, not historical financial values.
+Formatting goes through `CurrencyContext`, which now holds ILS as a constant. It is kept
+as a context, rather than inlined, so real multi-currency support has one place to land.
 
 ---
 
@@ -516,6 +576,56 @@ rtl
 
 ---
 
+# Accounts
+
+The services this project runs on are **not all under the same login**, which has cost time
+more than once. Both of the ones that matter are owned by **arielelya1@gmail.com**:
+
+| Service | Account | What lives there |
+|---|---|---|
+| Cloudflare | `arielelya1@gmail.com` | the `shilmancashflow.com` zone: DNS, and the cache that every deploy has to purge |
+| Supabase | `arielelya1@gmail.com` | project `fzwxcaidvaweczxwvljk`: database, auth, email templates |
+
+Signing in as any other address shows **"No domains found in this account"** in Cloudflare,
+which reads as the domain being gone rather than as the wrong login. The Cloudflare account
+id is `f559365f9c8e6e20320f8bf2eff9d5d8`, so the zone's DNS is at:
+
+```text
+https://dash.cloudflare.com/f559365f9c8e6e20320f8bf2eff9d5d8/shilmancashflow.com/dns/records
+```
+
+The Worker that serves production lives in **this same account**, and holds the Custom Domains
+for `shilmancashflow.com` and `www`. The apex is an `AAAA` record to `100::` with `proxied=true`,
+the dummy-origin pattern that hands the request to that Worker. There are no Workers Routes on
+the zone and no Pages projects in the account; the Custom Domain is the whole mechanism.
+
+A second Cloudflare account, `shilman.finance@gmail.com`, held a **duplicate Worker of the same
+name** bound to nothing. On 2026-11-05 wrangler was logged in as that account and four deploys
+went into it while production sat frozen on the previous day's build. None of them failed: a
+deploy to the wrong account uploads the assets, prints a Version ID, and reports the version
+live at 100%, into a Worker no domain points at. Every symptom read as a stale edge cache, and
+the cache was never involved. `wrangler.jsonc` now pins `account_id`, so that deploy is refused
+instead of silently succeeding. **When production looks stale, run `npx wrangler whoami` before
+touching the cache.** That account is queued for deletion as of 2026-11-05.
+
+The purge still needs its own API token (`cloudflare-cache-purge-token` in the macOS Keychain):
+wrangler's OAuth scopes include `zone:read` but no cache purge, whatever account it is on. And a
+third-party "connect your Cloudflare" button, like Resend's auto-configure, lands in whichever
+account the browser is signed into, so it can still miss this zone.
+
+Auth mail is a third account again: **Resend**, since 2026-10-20, sending as
+`no-reply@shilmancashflow.com` from the Ireland region, with DKIM and the sending CNAMEs on
+the shilmancashflow.com zone. Before that it went out through Gmail SMTP as
+`shilman.finance@gmail.com`, so a password reset arrived from a gmail.com address and linked
+to shilmancashflow.com - the shape users are taught to distrust.
+
+Two things about that zone are easy to break. The Resend records live on the `send` and
+`rsend` subdomains, so the root SPF and the IONOS MX records that carry the business mail are
+untouched and must stay that way. And both CNAMEs are **DNS only**: proxied through Cloudflare,
+mail stops leaving. `supabase/templates/README.md` holds the template side.
+
+---
+
 # Repository Location
 
 All commands run from the repository root:
@@ -530,6 +640,47 @@ which currently sits inside a parent:
 cash_flow/
 ```
 
+## Branches
+
+`main` is the product. It is what deploys.
+
+`redesign/stage-1-foundations` is a **rejected** visual redesign, kept locally
+and never merged or deployed. Twelve commits from September 2026 that rebuilt
+the whole look: a token layer, Assistant in place of Heebo, shared Row/Bar/Stat
+primitives, and two attempts at grouping - first removing every card ground so
+content sat flat on the page, then "wells", tinted sunken regions on white with
+a 248px desktop rail.
+
+Both groupings were rejected after being seen on real data. The first read as
+"no division, no differentiation between components", worst at desktop width;
+the second was rejected too. **Do not treat that branch as unfinished work to
+pick up, and do not re-propose either grouping.** If visual change comes up
+again, start by asking what specifically is wrong with the current screens.
+
+Two things on that branch are worth knowing about, because they are defects
+rather than styling and they are still live on `main`:
+
+- The bottom bar declares `backdrop-blur` over an opaque ground, so it does
+  nothing. Fixing it changes how the bar looks, which is why it was left.
+- Nothing in the product sets `unicode-bidi`, so an amount rendered inside
+  Hebrew text can have its minus sign and shekel glyph reordered. The fix
+  touches all 61 places that draw a figure. Latent, not observed.
+
+The accessibility and mobile fixes from that period were separated out and are
+on `main`: the viewport zoom lock is gone, fields are 16px at phone width
+(enforced once in `index.css`, because 45 fields override the Input default),
+the bar clears the iPhone home indicator, and the FAB has an accessible name.
+
+The dialog close button sits at the physical **top right**, deliberately
+(2026-10-01). It was moved to the logical edge during that period because in
+RTL the right edge is where a right-aligned title begins, but every
+`DialogTitle` in the product is centered, so there is nothing to collide with,
+and the right corner is where a Hebrew reader looks for it. It is a bare grey
+glyph with no ring or circle, turning orange on hover; the keyboard focus ring
+is `focus-visible` only, so tapping it no longer leaves an orange ring behind.
+If a right-aligned dialog title is ever added, give that dialog's header
+padding rather than moving the button back.
+
 ---
 
 # Commands
@@ -542,7 +693,8 @@ npm run build
 # Production build -> dist/
 
 npm run typecheck
-# tsc --noEmit
+# tsc --noEmit on tsconfig.app.json and tsconfig.node.json
+# (the root tsconfig.json has "files": [], so a bare tsc --noEmit checks nothing)
 
 npm run lint
 # eslint .
@@ -556,8 +708,27 @@ npm run test:watch
 npm run test:db
 # node test-runner.mjs - integration tests against the live Supabase project
 
+npm run test:e2e
+# playwright test - browser tests, desktop and phone viewports
+
+npm run test:e2e:ui
+# playwright test --ui - the same suite in Playwright's interactive runner
+
 npm run test:all
-# vitest run && node test-runner.mjs
+# vitest run && playwright test && node --env-file=.env.local test-runner.mjs
+```
+
+Deploying an edge function is separate from deploying the site, and is not an npm script:
+
+```bash
+npx supabase functions deploy market-data --project-ref fzwxcaidvaweczxwvljk
+# from shilman-cash-flow/, after npx supabase login. See the deploy skill, step 5a.
+```
+
+Run a single browser test:
+
+```bash
+npx playwright test --project=desktop -g "translates an unconfirmed address"
 ```
 
 Run a single unit test:
@@ -579,6 +750,23 @@ This is already configured through:
 ```text
 .npmrc
 ```
+
+---
+
+# Browser Tests
+
+`e2e/` holds Playwright tests, run against a real Chromium at both desktop and phone
+widths. They cover what jsdom cannot: layout at 390px, autofill attributes the browser
+actually honours, and whether an error shaped the way GoTrue shapes its own reaches the
+screen in Hebrew.
+
+They are hermetic. `e2e/helpers.ts` intercepts every request to `supabase.co`, and the
+deny-everything net is registered **first** so that Playwright, which matches handlers
+newest-first, lets the specific stubs win. A call the helper does not account for is
+aborted rather than allowed through, so a run cannot create an account, send mail or trip a
+rate limit against the live project.
+
+Adding a stub means adding it to `stubSupabase`, not relaxing the catch-all.
 
 ---
 
@@ -642,7 +830,6 @@ Auth
 Currency
 Categories
 Transactions
-RecurringTransactions
 Budgets
 Goals
 Investments
@@ -661,7 +848,34 @@ Contexts generally:
 1. fetch the full user-scoped data set on login,
 2. store it in `useState`,
 3. expose CRUD helpers,
-4. expose a `refreshX()` function.
+4. expose a `refreshX()` function,
+5. expose `loadError`, true when the last read failed.
+
+`loadError` exists because `loading` cannot answer the question that matters. A failed read
+left the previous state in place, which on a first load is an empty list, and the screen
+drew zeros - indistinguishable from an account that really has no budget, and in this
+product that is a reason not to act on the number. A read has three outcomes, not two:
+there is data, there is no data, and nothing is known.
+
+Screens render the failure through `components/LoadError.tsx`, and **only when there is
+nothing to draw** (`loadError && data.length === 0`). A background refresh that fails
+behind figures already on screen keeps them and leans on the toast: good numbers are worth
+more than an error page. The dashboard and the תזרים screen are the exception in shape only
+- each totals several sources, so any one of them failing empty makes every figure on it
+meaningless, and each picks the failed source by priority.
+
+**A screen waits for every read its figures are derived from, not only the ones it reads
+rows out of.** The תזרים screen gated on categories and budgets while summing every
+"actual" - the three headline totals, each category's בפועל and יתרה, ניצול תקציב, every
+ring - from `transactions`, which it did not wait for. While that read was in flight, and
+for good if it failed, the screen drew a complete and confident month in which nothing had
+been spent and every category still had its whole plan available. Both screens now gate on
+`transactionsLoading` and name `transactionsError` first in their failed-source priority.
+
+`AuthContext` carries the same idea as `profileError`. Anything routing on `isOnboarded`
+must consult it: an unreadable profile means unknown, not false, and sending an established
+user through onboarding is not a harmless detour, because choosing a mode there runs
+`set_budget_mode` and re-derives their plans.
 
 There is no meaningful React Query cache for domain data.
 
@@ -689,13 +903,13 @@ Important RPCs include:
 
 ```text
 create_default_budgets_for_month
-generate_recurring_transactions_for_month
 recalculate_budget_chain
 recalculate_forward
 recalculate_balance
-recalculate_yearly_summary
 set_category_plan
 set_budget_mode
+get_yearly_summary
+get_transaction_years
 ```
 
 The client generally:
@@ -740,17 +954,11 @@ transactions-changed
 
 after writes.
 
-`BudgetsContext` listens for this event and re-fetches after a 600ms debounce so database-triggered calculations are reflected in the UI.
+`BudgetsContext` listens for this event and re-fetches once, immediately, with no timer.
 
-## Recurring transaction changes
+There used to be two reads, at 150ms and 1000ms, on the belief that there was no way to know when the database-side recalculation had committed. There is: `after_transaction_change` is an `AFTER ... FOR EACH ROW` trigger, so it runs inside the write's own transaction, PostgREST does not answer until that commits, and the event is dispatched after the write resolved. By the time the handler runs the recalculated rows are already there.
 
-`RecurringTransactionsContext` dispatches:
-
-```text
-recurring-transactions-changed
-```
-
-and `TransactionsContext` listens for it.
+A read that resolves out of order is handled by a sequence number (`fetchSeqRef`) rather than by timing, so only the newest read publishes.
 
 When adding a new write path that causes database-side recalculation, the relevant refresh event may also be required.
 
@@ -774,6 +982,66 @@ startOfMonth
 ```
 
 for this behavior.
+
+## Israel Time
+
+Every date rule is enforced twice, in `finance.ts` and in Postgres, and the database side
+(`budget_current_month`, `budget_window_start`, `validate_transaction_date`) works in
+`Asia/Jerusalem`. The client used the device clock, so near midnight at a month boundary, or
+for a user abroad, one side accepted what the other rejected.
+
+Use `israelNow()` from `finance.ts` instead of `new Date()` anywhere a date is compared to
+the current month, the edit window, or "the future". It is already the default reference for
+`getEditWindowStart`, `isMonthReadOnly` and `isFutureTransaction`.
+
+## Money From User Input
+
+**Whole shekels. The product has no agorot anywhere: not in an input, not in the database,
+not on screen.** Decided 2026-11-04.
+
+Every amount in Cash Flow is typed by a person from memory. There is no bank import, no
+CSV import and no price feed - `Papa.unparse` is export only, and `market-data` is
+read-only and writes no money - so `247.80` is not a truer figure than `248`, it only looks
+like one. The planning layer is round by nature, nothing the product decides turns on fifty
+agorot, and the carryover chain would otherwise roll a balance of `-0.37` forward through
+every later month as permanent noise. The decimal point is also the most dangerous key on a
+phone: one slip is a tenfold error, and a tenfold error is hard to catch because the result
+still reads as a plausible amount.
+
+If a bank import is ever added, this decision has to be revisited: imported figures come
+from outside and are not the user's recollection.
+
+Three layers, the same shape as the date rules:
+
+1. **The keystroke.** Every money field filters with `isMoneyInput()` from `finance.ts` and
+   carries `type="text" inputMode="numeric"`. The character never arrives, so the refusal
+   is never a surprise at save time.
+2. **The parser.** `parseAmount()` takes a run of digits and returns `NaN` for everything
+   else - a decimal point, a comma, a minus, exponential notation, empty. It **refuses** a
+   decimal point rather than rounding it: accepting `247.80` and storing `248` would save a
+   different number from the one on screen, which is how the comma bug did its damage.
+   Callers must refuse `NaN` rather than write it; `Number.isFinite` is the check, and
+   `GoalsContext` throws on a non-finite amount as the last line of defence.
+3. **The database.** A CHECK per user-entered money column. Derived columns
+   (`budgets.actual_amount`, `balance`, `carryover_amount`) are deliberately left
+   unconstrained: they are recomputed by `recalculate_budget_chain` on every transaction
+   write, so a constraint there would make a write fail over a row written years earlier.
+
+Never use `type="number"` for money. It still lets `e`, `-` and `.` through in most
+browsers, so the character lands and the rule only bites on save. To check, grep for the
+attribute as it would actually be written rather than for the bare string - the plain
+search also matches the comments that say not to use it:
+
+```bash
+grep -rn 'type="number"' src/ | grep -v '//'
+```
+
+Anything that *derives* one money field from another writes whole shekels too -
+`deriveWithdrawalPair` and `deriveDepositPair` in `lib/investments.ts` round, because they
+set a field programmatically and so bypass its keystroke filter.
+
+Percentages are not money. `toFixed` on a change percentage, an allocation share or a
+progress ring is correct and stays.
 
 ## Date-only Values
 
@@ -814,11 +1082,28 @@ This rule is enforced in multiple places, including:
 finance.isMonthReadOnly / useBudgetLimits
 BudgetsContext.setCategoryPlan
 TransactionsContext guards
-transaction Zod schema
+TransactionModal and EditTransactionModal
 validate_transaction_date, validate_budget_edit (database)
 ```
 
-Search in `BudgetSearchPanel` still looks back 12 months, because it only views data.
+Separately from the hard limit, a change inside the window that lands in a **past month**
+shows a warning that the later months move with it, because budgets carry forward. Since
+2026-09-19 all three screens share one rule: the date is in a month before this one, the
+category is an expense, and `budgetMode` is on. `TransactionModal`, `EditTransactionModal`
+and the delete confirmation in `CategoryTransactionsModal` each check exactly that, using
+`israelNow()`. Keep them together: they drifted once, and the two nearest months, the ones
+people actually correct, were the ones that stayed silent.
+
+There is no shared validation module. `src/lib/schemas.ts` held Zod schemas that were meant
+to be reused and never were: every screen defined its own rules inline, and after
+`AddTransaction` was deleted the file was imported by nothing but its own test. It was
+removed on 2026-09-18. Validation lives in the screen and in the database, and those two are
+what must agree.
+
+Search in `BudgetSearchPanel` looks back 12 months, because it only views data. Since
+2026-09-19 the type and the period are filters rather than preconditions: any one of
+keyword, type, category or period returns results, and with no period set the search covers
+the full 12 months.
 
 Transactions beyond the end of the current month are also blocked.
 
@@ -831,29 +1116,54 @@ Categories are soft-deleted rather than physically removed.
 Deletion sets:
 
 ```text
-is_active = false
 deleted_at = ...
 ```
 
 This preserves historical transaction relationships.
 
+`is_active` was removed on 2026-09-18. It duplicated `deleted_at`, which holds strictly
+more information and which the partial unique index already keys on:
+
+```text
+UNIQUE (user_id, name) WHERE deleted_at IS NULL
+```
+
+That index is what lets a user re-create the name of a category they deleted. A category
+is live when `deleted_at IS NULL`.
+
+`CategoriesContext` exposes `categories` (active only, for pickers and lists) and
+`allCategories` (active and deleted). Anything that totals or labels transactions (dashboard,
+budget screen, annual summary, CSV export, search) looks categories up in `allCategories`, so a
+deleted category's history still counts everywhere it is totalled. The budget screen lists a
+deleted category, marked "(נמחקה)" and without a plan, only in months where it has transactions.
+
+Every screen that names a category marks a deleted one "(נמחקה)", and all of them must: the
+unique index on the name is partial (`WHERE deleted_at IS NULL`), so a deleted category and a
+live one can carry the same name. The annual summary took its names straight from
+`get_yearly_summary`, which does not return `deleted_at`, and so showed two rows reading
+"סופר" with different totals and nothing to tell them apart. It now looks the id up in
+`allCategories` like the rest.
+
 Normal category reads filter:
 
 ```text
-is_active = true
+deleted_at IS NULL
 ```
 
-Categories are ordered by:
+Categories are ordered by `position`, which is `NOT NULL`. A new category is placed at the
+end of the user's list by the `trg_set_category_position` trigger, so the client never
+assigns it.
 
-```text
-position
-```
+Drag-and-drop reordering uses `dnd-kit`.
 
-and drag-and-drop ordering uses:
-
-```text
-dnd-kit
-```
+In **budget mode** `CategoryManagementModal` requires a monthly budget for a new **expense**
+category and will not stage it without one (2026-09-19). The figure goes to
+`categories.planned_amount` through `addCategory`, and then to the current month's row
+through `setCategoryPlan`, which is the part that matters:
+`create_budgets_with_carryover` reads `NULLIF(c.planned_amount, 0)`, so a deliberate plan
+of 0 would come back as no plan at all. Income categories have no plan and tracking mode
+has none, so neither is asked. Before this, a new category was born with no plan and set
+off the "קיימות קטגוריות ללא תקציב" alert immediately.
 
 ---
 
@@ -885,11 +1195,55 @@ AuthContext
 
 Supabase is the main backend platform.
 
-The project contains approximately 160 timestamped migrations under:
+The project contains 191 timestamped migrations under:
 
 ```text
 supabase/migrations/
 ```
+
+## Do not write new migration files
+
+**A schema change is handed to the user as SQL to paste into the SQL Editor, in the reply,
+not committed as a file under `supabase/migrations/`.** Ask them to run it, then verify the
+result against the live schema with a read-only query and report what came back.
+
+The reason is that a file cannot say whether it ran, and a wrong answer to that question is
+expensive in both directions: a file that has been applied but still reads NOT YET APPLIED
+invites someone to run it again, and one that was never applied but looks ordinary invites
+the assumption that the schema already has it. This directory already carries both kinds of
+drift - see the section below - and every new file adds another thing to keep honest.
+
+The live database is the record of what the schema is, which is what the rest of this file
+already says. Read a function with `pg_get_functiondef` rather than from the newest file
+that mentions it.
+
+Two things follow from this:
+
+- **Take the current definition from the database before rewriting a function.** A
+  `CREATE OR REPLACE` built from a migration file can silently undo whatever was changed
+  after it, because the files are not in step with the schema.
+- **Read-only queries are available without asking; writes are not.**
+  `npx supabase db query "<sql>" --remote=fzwxcaidvaweczxwvljk --read-only` runs. Without
+  `--read-only` the CLI refuses in an agent session and says so, which is the guardrail
+  working, not an obstacle to route around.
+
+## Migration history
+
+`supabase_migrations.schema_migrations` records what has been applied. Two things about it:
+
+**Do not compare it to the filenames by exact version.** Lovable recorded many migrations one
+or two seconds off from the filename it wrote itself, so a naive comparison makes 166 of 186
+files look unapplied when almost all of them ran. Match within a few seconds.
+
+**It is nearly, not fully, complete.** The 27 hand-applied migrations that could be proved
+applied were recorded on 2026-09-18 (`20260918111600`). Fifteen files from 2025 stay
+unrecorded: their effects are probably in the schema, but marking one applied that was not
+would make a future push skip a change the database needs.
+
+`20260503090000_remove-goal-autocomplete.sql` is deliberately unrecorded because it was
+genuinely never applied. **Never push it.** It drops a trigger and never recreates it, so on
+its own it stops milestone changes from updating goal progress. `20260918111100` supersedes
+it and does the job correctly.
 
 These define:
 
@@ -899,28 +1253,109 @@ These define:
 - RLS policies,
 - financial behavior.
 
+## New tables need an explicit grant
+
+From 2026-10-30 Supabase stops granting Data API access automatically to tables created in
+`public` on existing projects. The live tables keep the grants they already have, so nothing
+in production changes. A table created from that date onwards is unreachable through
+supabase-js, PostgREST and GraphQL until it is granted, and the error is `permission denied`,
+not an RLS failure: privileges are checked before any policy runs, so a correct
+`auth.uid() = user_id` policy will not make an ungranted table readable. Do not debug that as
+a policy problem.
+
+No migration in this project grants table privileges - every `GRANT` here is `GRANT EXECUTE`
+on an RPC. The migration files therefore no longer rebuild a working database on their own:
+replaying them into a fresh project or a preview branch would leave every table invisible to
+the client. Nothing does that today (there is no local `supabase db reset`, no preview branch
+and no CI that applies migrations), so this is latent rather than broken.
+
+Any migration that creates a table in `public` must grant it in the same file:
+
+```sql
+grant select, insert, update, delete on public.<table> to authenticated;
+grant select, insert, update, delete on public.<table> to service_role;
+```
+
+`anon` is left out on purpose. Every table is user-scoped behind `auth.uid() = user_id` and
+nothing here is readable without a session, so granting `anon` would widen the surface for no
+feature.
+
 Edge Functions live under:
 
 ```text
 supabase/functions/
 ```
 
-Current functions include:
+Current functions:
 
 ```text
 delete-account
 market-data
-copy-user-data
-cleanup-unconfirmed-users
-generate-month
-recalculate-yearly-summary
 ```
 
-JWT verification configuration is defined in:
+Both are called by the app and nothing else. `generate-month` and
+`recalculate-yearly-summary` were removed on 2026-09-19, from the repo and from the deployed
+project: nothing called either of them. `generate-month` was a thin wrapper over
+`create_budgets_with_carryover`, which is still there and can be called directly.
+`recalculate-yearly-summary` wrapped `recalculate_yearly_summary`, which no longer exists:
+there is nothing left to recalculate, because the year is aggregated on request.
+
+`cleanup-unconfirmed-users` and `copy-user-data` were removed on 2026-09-18, both from the
+repo and from the deployed project, along with their secrets.
+
+The cleanup job had failed on every run since it was created. The cause was not a missing
+secret: `CLEANUP_SECRET` was set as an Edge Function secret all along, while the invoker
+read `vault.decrypted_secrets`, a different store, which is empty. **Edge Function secrets
+and the database vault are separate places with no connection between them.** That was only the first of three problems: `listUsers()` with no arguments returns the first
+50 users, so the job could never have seen account 51 even once the secret was found, and it
+left a service-role endpoint guarded by a single shared string.
+
+`copy-user-data` deleted every transaction, budget and category of a target account looked
+up by email, then copied another account's in. Nothing in the app ever called it, and its
+secret was set, so it was a live and reachable way to destroy an account's data. Its source
+is in git history if the seeding behaviour is ever wanted again.
+
+The cleanup is now `public.cleanup_unconfirmed_users()`, called straight from pg_cron. An
+account is removed when it has never signed in and was created more than 30 days ago
+(widened from 7 on 2026-09-19 by `20260919200000_cleanup_window_30_days.sql`; the rule is
+otherwise the one the function always used). It refuses to run, deleting nothing, if more than 25
+accounts match, so a clock or logic problem surfaces as a failed job rather than as lost
+accounts.
+
+**Its name is narrower than its rule, and the rule is the one to trust.** The function tests
+`last_sign_in_at IS NULL`, which is "never signed in" and not "never confirmed the address".
+In practice confirming establishes a session, so the two almost always agree - but an account
+that confirmed and never signed in is inside the rule and would be deleted. Do not widen this
+function on the strength of its name: whatever it is called, the condition it deletes on is
+the one written in it.
+
+`unlock-new-month` is gone too, both the monthly job and the deployed function. It had
+errored on every run since the `unlocked_months` table was dropped, and its source was never
+in this repo. One scheduled job now remains in the project, and it works.
+
+JWT verification is configured in:
 
 ```text
 supabase/config.toml
 ```
+
+`delete-account` runs with `verify_jwt = true` since 2026-09-19, so the platform rejects a
+request with no or a malformed token before the function body runs. The function still
+verifies the session itself, because that is what identifies which account to delete;
+neither check replaces the other. `market-data` stays at `false` on purpose: it returns
+public index data and touches no table.
+
+**The file is not the switch.** `config.toml` only reaches production through
+`supabase functions deploy <name>` or the dashboard toggle. Changing it alone leaves the
+deployed function exactly as it was, with nothing to indicate the drift.
+
+The same is true of the function source: `wrangler deploy` ships the Worker and `dist/`
+and nothing under `supabase/`, so a function change can sit committed on `main` and never
+reach production. Deploying one from this checkout needs two things that are easy to miss:
+`npx supabase login`, which only the user can complete, and an explicit
+`--project-ref fzwxcaidvaweczxwvljk`, because `supabase link` has never been run here. Run
+it from `shilman-cash-flow/`; from the parent folder the CLI reports the entrypoint as
+missing. See the `deploy` skill, step 5a.
 
 ---
 
@@ -932,13 +1367,34 @@ Every domain table is scoped through:
 user_id
 ```
 
-and protected using Supabase Row Level Security.
+and protected using Supabase Row Level Security. All eight tables carry the same policy,
+`auth.uid() = user_id`, for SELECT, INSERT, UPDATE and DELETE: four policies each, except
+profiles, which has three because it has no DELETE policy (accounts are removed by the
+cascade from `auth.users`). It was nine tables until `yearly_summaries` was dropped on
+2026-09-19; the twelve foreign keys between them were fifteen then.
 
 Client queries also explicitly filter with:
 
 ```ts
 .eq('user_id', user.id)
 ```
+
+`transactions`, `budgets`, `milestones` and `investment_entries` each store `user_id`
+alongside a parent id so RLS can filter without a join. That duplication is enforced by
+**composite foreign keys** on `(parent_id, user_id)`, added in
+`20260918111300_composite_owner_fks.sql`. Do not replace one with a single-column key: an
+INSERT policy only checks `auth.uid() = user_id`, and a foreign key check runs as the table
+owner and bypasses RLS, so without the composite key a user could attach their own row to
+another account's category, goal or portfolio. `get_yearly_summary` joins transactions to
+categories filtering only on `t.user_id`, so a cross-owner `category_id` would put another
+account's category name into the attacker's annual summary. The same held for
+`recalculate_yearly_summary` before it was dropped: the aggregation moved, the reason for
+the composite keys did not.
+
+`transactions.category_id` is `ON DELETE RESTRICT` while profiles cascades to both
+categories and transactions. `supabase/verification/20260918111300_account_deletion_verify.sql`
+proves the cascade order still deletes an account cleanly; run it after any change to these
+keys.
 
 The application should preserve strict user / household data isolation.
 
@@ -967,12 +1423,12 @@ Primary tables include:
 profiles
 ```
 
-Fields include:
+`user_id` is the primary key. Fields include:
 - display_name
-- avatar_url
-- currency
 - budget_mode
 - is_onboarded
+- last_active_at (when the user last opened the app; written by the client on session
+  load, at most once an hour)
 
 ## Categories
 
@@ -985,7 +1441,7 @@ Includes:
 - planned amount,
 - icon,
 - position,
-- soft-delete fields.
+- deleted_at (soft delete).
 
 ## Transactions
 
@@ -994,23 +1450,14 @@ transactions
 ```
 
 Includes:
-- amount,
+- amount (positive; the category's type decides income or expense),
 - transaction_date,
-- notes,
-- recurring_id.
+- notes (**required**: NOT NULL plus a not-blank CHECK, mirrored by `transactionSchema`).
 
-## Recurring Transactions
+`category_id` is deliberately the one foreign key with no `ON DELETE` rule: deleting a
+category that has transactions must fail rather than erase financial history. The matching
+key on `budgets` cascades, because a budget row is derived, not history.
 
-```text
-recurring_transactions
-```
-
-Includes:
-- amount,
-- day_of_month,
-- start_date,
-- end_date,
-- is_active.
 
 ## Budgets
 
@@ -1041,17 +1488,27 @@ investment_entries
 
 ## Annual Summaries
 
-```text
-yearly_summaries
-```
-
-Contains cached JSON rollups including:
+There is no table. `get_yearly_summary(p_year)` returns one year as JSON, aggregated from
+`transactions` each time the screen asks:
 
 ```text
 monthly_data
-expenses_by_category
 expenses_by_category_by_month
 ```
+
+plus the year's own income and expense totals. `get_transaction_years()` returns the years
+the picker can offer. Both are `SECURITY INVOKER`, so RLS scopes them to the caller.
+
+`yearly_summaries` used to store this. It was the only cache in the schema and the only
+thing that could drift, and it had: one account's 2025 row held December expenses of
+10538.171 against a transaction sum of 10538.17, last rebuilt in March. The table, its four
+triggers, its two trigger functions and `recalculate_yearly_summary` were dropped on
+2026-09-19, after the bundle that stopped reading them was live.
+
+**Nothing in the schema is a cache now.** Every figure the app shows is derived from the
+rows it is derived from, at the moment it is shown, except `budgets.actual_amount`,
+`balance` and `carryover_amount`, which are maintained by triggers within the 3-month
+window and are the deliberate exception.
 
 ---
 
@@ -1076,6 +1533,38 @@ New components can be added through:
 ```bash
 npx shadcn@latest add
 ```
+
+## Date pickers
+
+There are two, and both give the user a jump and a step (2026-10-01):
+
+- `components/ui/calendar.tsx` wraps react-day-picker and backs every `DatePickerInput`.
+  `captionLayout="dropdown-buttons"` puts the month and year dropdowns **and** the
+  prev/next arrows in the caption; react-day-picker swaps the arrow directions itself
+  under `dir="rtl"`. The caption carries `px-9` so the centered dropdowns stay clear of
+  the absolutely positioned arrows.
+- `components/MonthPicker.tsx` is the month grid behind the dashboard and budget headers.
+  The arrows step a year; the year itself is a dropdown when the range spans more than
+  one year, and plain text when it does not.
+
+Both render Hebrew month and weekday names (`locale: he`), like the rest of the product.
+
+The month and year dropdowns are **native `<select>` elements** drawn under a styled
+wrapper. The option list the browser opens takes its colors from the select, not from the
+wrapper, so the select carries `bg-background text-foreground` explicitly: a hover color
+on the wrapper alone once left the open list white on white, unreadable exactly while
+being scrolled.
+
+react-day-picker renders each dropdown's visible text **and its caret** inside one element
+and gives it the `caption_label` class, so that class must describe an inline row
+(`inline-flex items-center`). As a block it pushed the caret onto a second line and every
+dropdown grew to 46px inside a 40px caption - which is what made the caption look
+inflated next to the 28px arrows.
+
+Style the calendar in `calendar.tsx`. `index.css` used to hold rules keyed on
+react-day-picker's default class names (`.rdp-dropdown_month` and friends), which
+`calendar.tsx` overrides wholesale, so none of them ever applied; they were removed on
+2026-10-01.
 
 The product is Hebrew-first.
 
@@ -1134,20 +1623,23 @@ The visual system should remain consistent with Shilman Finance rather than intr
 
 # Dormant Components
 
-The following components currently exist but are not rendered in live pages:
-
-```text
-SavingsPlannerCard
-CategoryChart
-```
-
-Treat them as dormant code, not current product behavior.
+None. The seven components and modules nothing rendered were deleted on 2026-09-18:
+`AddTransaction`, `TopBar`, `ErrorDialog`, `DetailedChartModal`, `SavingsPlannerCard`,
+`CategoryChart` and `useFinancialInsights`. Their source is in git history.
 
 `HeroStrip` is the shared page header for most major sections except the dashboard.
 
 ---
 
 # TypeScript
+
+Passwords: the rule this project enforces (8 characters, with a lowercase letter, an
+uppercase letter, a digit and a symbol) lives in `src/lib/password.ts` and is used by both
+the sign-up and reset screens. `passwordProblem` answers a submit handler with one
+sentence; `passwordRequirements` returns the same rule as five labelled booleans, which
+both screens render live under the field so the missing part is visible while typing. Sign-up used to promise 6 characters and no character classes,
+which is not what the server accepts. If the rule changes in the Supabase dashboard, change
+that file too; nothing detects the drift.
 
 The current TypeScript configuration does **not** enable:
 
@@ -1199,6 +1691,13 @@ Any future feature should support the core question:
 # Writing Style
 
 The application is Hebrew-first.
+
+**The brand is spelled שילמן פייננס, with two yuds.** It was spelled both ways until
+2026-10-20: the login, onboarding and terms screens had פייננס, while the page title, the
+in-app header and the auth emails had פיננס - so a user got a mail saying one thing and
+landed on a screen saying the other. Note that פיננסי, the ordinary adjective, is unrelated
+and keeps its single yud: "ניהול פיננסי חכם" is correct and must not be swept up in a
+find-and-replace.
 
 User-facing copy should be:
 

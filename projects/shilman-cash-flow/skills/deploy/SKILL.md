@@ -26,8 +26,12 @@ Stop, report what happened, and do not continue when:
   `*.key`, or content containing `sb_secret_`, `sbp_`, `service_role` or a private key.
 - The branch is not `main`, or a rebase onto `origin/main` conflicts (run
   `git rebase --abort` first).
-- The changes touch `supabase/migrations/` or `supabase/functions/`. The frontend must
-  not go live before the DB change. Ask whether it was applied (see `db-change`).
+- The changes touch `supabase/migrations/`. The frontend must not go live before the DB
+  change. Ask whether it was applied (see `db-change`).
+- The changes touch `supabase/functions/` **and the frontend depends on the new function
+  behaviour**. Deploy the function first (step 5a). A function change that the frontend
+  works without may ship after the site, but say so in the report rather than letting it
+  read as done.
 - `git push` is rejected after syncing, or wrangler is not authenticated
   (ask the user to run `npx wrangler login`).
 
@@ -80,6 +84,34 @@ through a HEREDOC and end it with the `Co-Authored-By` trailer.
 git push origin main
 ```
 
+## 5a. Deploy edge functions, when they changed
+
+`wrangler deploy` ships the Worker and `dist/` and **nothing under `supabase/`**. A changed
+edge function that is committed and pushed still does not reach production until this runs,
+and nothing in the output of the steps around it says so.
+
+Run from `shilman-cash-flow/`, never the parent folder, and pass the project explicitly:
+this checkout is not linked (`supabase link` has never been run here), so without
+`--project-ref` the CLI stops at `ProjectRefNotLinkedError`.
+
+```bash
+npx supabase functions deploy market-data --project-ref fzwxcaidvaweczxwvljk
+```
+
+The ref is the one in `supabase/config.toml` (`project_id`) and in `.env`
+(`VITE_SUPABASE_PROJECT_ID`). Check they agree before deploying to it.
+
+`WARNING: Docker is not running` is expected and harmless here; the deploy uploads the
+source and bundles server side.
+
+Stop and ask the user when it fails with `AccessTokenRequiredError`: the CLI needs
+`npx supabase login`, which only they can complete.
+
+The response cannot be verified from here. The function checks the Authorization header
+itself, so an unauthenticated call correctly returns 401 and the publishable key is not a
+session. Treat the CLI's `Deployed Functions.` as the confirmation and say that is what
+was confirmed.
+
 ## 5. Deploy
 
 ```bash
@@ -125,8 +157,22 @@ curl -s https://shilmancashflow.com/ | grep -o 'assets/index-[^"]*\.js'
 ```
 
 The hash must match `dist/index.html`. A purge can take up to about 30 seconds. If the old
-hash is still served, wait with Monitor and an until-loop (not a foreground sleep), for
-up to 2 minutes.
+hash is still served, wait with Monitor and an until-loop (not a foreground sleep).
+
+**A successful Purge Everything is not proof the edge dropped the object.** It has twice
+returned `success=true` while production kept serving the previous build. If the old hash
+is still there about a minute on, do not keep waiting and do not redeploy. Purge the two
+URLs that matter on the same zone, then poll again:
+
+```bash
+--data '{"files":["https://shilmancashflow.com/","https://shilmancashflow.com/index.html"]}'
+```
+
+The assets are content-hashed and need no purge of their own. If the URL purge also seems
+not to land, confirm the version is live (`npx wrangler deployments list` shows it at 100%)
+and that workers.dev serves the new hash, then poll in the background: a correct deploy
+behind a slow edge looks exactly like a failed one for the first few minutes. The timing is
+not a fixed number, so do not report a stale edge as a failed deploy.
 
 ## 9. Report
 
@@ -134,6 +180,8 @@ Short, in Hebrew:
 - Commit hash and subject, or "no new changes".
 - Push done.
 - Worker Version ID.
+- Edge functions deployed, or explicitly that none changed. When one changed and did not
+  ship, say what the product looks like until it does.
 - workers.dev verified; production verified, or purge pending.
 - Anything unstaged, skipped or unusual.
 

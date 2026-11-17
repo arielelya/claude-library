@@ -18,9 +18,10 @@ Skills useful in any project. Source: [anthropics/skills](https://github.com/ant
 ## projects
 | Project | Contents |
 |---|---|
-| shilman-cash-flow | `CLAUDE.md` for the Cash Flow app. Skills: `deploy`, `db-change`, `cloudflare`, `wrangler`, `workers-best-practices`, `web-design-guidelines` |
+| shilman-cash-flow | `CLAUDE.md` (latest version from ~/Developer) and `scripts/supabase_sql.py`. Skills: `deploy`, `db-change`, `cloudflare`, `wrangler`, `workers-best-practices`, `web-design-guidelines`, `agents-sdk`, `cloudflare-email-service`, `cloudflare-one`, `cloudflare-one-migrations`, `durable-objects`, `nextjs-on-cloudflare`, `sandbox-sdk`, `sandbox-next`, `sandbox-stable`, `sandbox-migrate-to-next`, `turnstile-spin`, `web-perf` |
 | vele/dashboard | Dashboard README |
 
-Note: `cloudflare`, `wrangler`, `workers-best-practices` and `web-design-guidelines` are public skill packs (Cloudflare, vercel-labs/agent-skills) currently used only in Cash Flow.
-
-Not copied: the large `cloudflare/references/` folder, `settings.local.json` and `launch.json`.
+Notes:
+- `cloudflare`, `wrangler`, `workers-best-practices`, `web-design-guidelines` and the other Cloudflare skills are public skill packs (Cloudflare, vercel-labs/agent-skills), currently used only in Cash Flow.
+- Not copied: the large `cloudflare/references/` folder, `settings.local.json`, `launch.json`, `.env*` files, and Cursor's own built-in skills (`skills-cursor`).
+- `supabase_sql.py` reads its token from the macOS Keychain; no secrets are stored here.
