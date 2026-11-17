@@ -7,12 +7,13 @@ Personal library of reusable Claude skills and project context.
 
 ## Where skills live
 
-Skills exist in two places: this repo and the user's computer. The repo is the source of truth.
+Skills exist in two places: the user's computer and this repo. The computer is the source of truth; the repo is a copy for when the computer is not available.
 
-- Read skill content and project context from this repo.
-- When a skill or CLAUDE.md needs updating, update the repo first (commit and push to `main`).
-- If the same file also exists on the computer (and the computer is reachable), update that copy too so both stay identical. Typical computer locations: `~/Developer/cash_flow/shilman-cash-flow/.claude/skills/`, `~/.cursor/skills/`, `~/.agents/skills/`.
-- If the computer is not reachable, update only the repo and say so.
+- Computer reachable: read and edit the files on the computer, then push the same change to this repo (commit to `main`).
+- Computer not reachable: read from this repo. If something must change, update the repo and tell the user the change has not reached the computer yet.
+- Next time the computer is reachable: compare the repo with the computer and copy pending repo changes to the computer.
+- Before overwriting either side, compare both versions. If both changed since the last sync, ask the user instead of overwriting.
+- Typical computer locations: `~/Developer/cash_flow/shilman-cash-flow/.claude/skills/`, `~/.cursor/skills/`, `~/.agents/skills/`, `~/Documents/VELE Website/`.
 - Never copy secrets, `.env*` files or local settings into the repo.
 
 Keep this file short: it is loaded in every session. Put long material under `projects/` or `reference/`.
