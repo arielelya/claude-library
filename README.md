@@ -24,6 +24,7 @@ Skills useful in any project. Source: [anthropics/skills](https://github.com/ant
 | Project | Contents |
 |---|---|
 | shilman-cash-flow | `CLAUDE.md` (latest version from ~/Developer), `README.md`, `docs/` (APP_REFERENCE, BACKLOG), `supabase/templates/README.md` and `scripts/supabase_sql.py`. Skills: `deploy`, `db-change`, `cloudflare`, `wrangler`, `workers-best-practices`, `web-design-guidelines`, `agents-sdk`, `cloudflare-email-service`, `cloudflare-one`, `cloudflare-one-migrations`, `durable-objects`, `nextjs-on-cloudflare`, `sandbox-sdk`, `sandbox-next`, `sandbox-stable`, `sandbox-migrate-to-next`, `turnstile-spin`, `web-perf`, plus the Emil Kowalski design pack (`animate`, `animate-expo`, `animation-performance`, `animation-vocabulary`, `apple-design`, `ask-emil`, `ask-sonner`, `break-ui`, `choreograph`, `emil-design-eng`, `find-animation-opportunities`, `gestures`, `improve-animations`, `learn-taste`, `mobile-native`, `pick-ui-library`, `prototype`, `remove-animations`, `review-animations`, `write-swift`) |
+| shilman | Skills exported from the claude.ai account (the account is their source, this is a backup): `shilman-writer` (WhatsApp/Telegram posts for the investors group), `shilman-reels` (Instagram reels, carousels, captions) |
 | vele | `CLAUDE.md` for the VELE Shopify website (velewellness.com), copied from the computer. `docs/` (Shopify ideas and settings checklist), `dashboard/README.md`. Computer folder: ~/Desktop/VELE/Website |
 
 Notes:
