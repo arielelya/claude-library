@@ -371,7 +371,8 @@ dormant components, and this section still described it as present, which contra
 Dormant Components section further down. Its source is in git history.
 
 The only rule-based insights in the product are the ones the annual summary generates for
-itself. No AI is involved in any of them.
+itself. No AI is involved in any of them. The one place a model is involved is the assistant
+chat, below, and it is kept apart from these on purpose.
 
 ---
 
@@ -402,6 +403,73 @@ useRealTimeMarketData
 ```
 
 This is currently the application's only external market-data source.
+
+---
+
+# AI Assistant
+
+A floating button on every signed-in screen (`AiChatLauncher` in `components/AiChat.tsx`,
+rendered by `Layout`) opens a chat where the user asks free-form questions about their own
+figures. Added 2026-11-18.
+
+```text
+AiChat.tsx -> lib/ai-chat.ts (supabase.functions.invoke) -> Edge Function ai-chat -> Gemini API
+```
+
+It is the design the annual summary section said an AI version would need: **every figure is
+computed in code and the model only selects and phrases.** The function gives Gemini seven
+read-only tools (`get_summary`, `get_category_totals`, `get_monthly_totals`,
+`search_transactions`, `get_budget_status`, `get_goals`, `get_investments`). Each one reads
+rows and computes in `supabase/functions/ai-chat/aggregate.ts`, a pure module with no Deno or
+network code so vitest runs it directly. The prompt tells the model never to do arithmetic
+and to quote only what a tool returned. A wrong figure in this product costs more than a
+dull one.
+
+Rules that must survive later edits:
+
+- **Reads run as the caller.** The function builds its client from the request's own
+  `Authorization` header, so RLS decides what a tool can see, and every query also filters on
+  `user_id`. There is no service-role client in `ai-chat` on purpose: a prompt that talks the
+  model into a different query still cannot reach another account. Do not add one.
+- **Read-only.** There are no write tools. Adding one means deciding what the user sees and
+  confirms first, because the model would be choosing the write.
+- **`investmentStats` mirrors `computeInvestmentStats`** (`lib/investments.ts`), and
+  `ai-chat-aggregate.test.ts` checks the two against each other. The assistant quoting a
+  different profit from the investments screen is the failure this exists to prevent. If the
+  screen's arithmetic changes, change both. `get_budget_status` reports the database's own
+  `balance` and does not recompute it, for the same reason.
+- **The key is a secret, never an environment variable the browser can see.** `GEMINI_API_KEY`
+  is an Edge Function secret:
+  `npx supabase secrets set GEMINI_API_KEY=... --project-ref fzwxcaidvaweczxwvljk`.
+  Never put it in `.env`, in a `VITE_` variable (those are bundled into the site) or in the
+  repo. `GEMINI_MODEL` is an optional secret that switches the model with no code change;
+  the default is `gemini-3.5-flash-lite`. Google retires models, so if the function starts
+  answering 502, read the log for the upstream status before anything else, and check
+  ai.google.dev/gemini-api/docs/models.
+- **A mode the user is not in is not offered.** In tracking mode `get_budget_status` answers
+  that there is no budget, the prompt says so, and the suggested questions leave the budget
+  one out.
+- **The conversation is not stored.** It is React state in the launcher: it survives closing
+  the panel and is gone on reload. Nothing is written to the database or to localStorage, and
+  the function logs token counts only, never the conversation.
+- **Whole shekels, Israel time.** The prompt asks for whole shekels with the symbol, and
+  `todayInIsrael()` gives the function its date, because an edge runtime sits in UTC and the
+  date is wrong for the first hours of every Israeli day.
+
+Limits, stated plainly. **Weekly quota: 20 questions per account, per week starting Sunday
+00:00 Israel time.** It lives in `public.ai_chat_usage` and is taken by the RPC
+`consume_ai_chat_question()`, which runs as the caller (`auth.uid()`), holds the number 20
+itself, and checks and counts in one upsert. Changing the limit is a `CREATE OR REPLACE` of
+that RPC, not a code change. A failed answer still costs a question, on purpose: any refund
+RPC the caller can reach would reset the quota. If the RPC fails the function answers 503
+rather than answering uncounted, so the SQL must be live before the function is deployed.
+The burst limit (20 questions in 10 minutes) stays in front of it, in the memory of one
+function instance: it stops a client loop from burning the week's quota in a minute. Google also uses free-tier content to improve its products and does not use
+paid-tier content, so a key that serves real accounts should have billing enabled.
+
+Deploy with the function deploy in the `deploy` skill, step 5a, naming `ai-chat`. The site
+can ship before the function: the button then answers that the assistant is not available
+yet, which is the 503 the function returns when the secret is missing.
 
 ---
 
@@ -1289,11 +1357,12 @@ supabase/functions/
 Current functions:
 
 ```text
+ai-chat
 delete-account
 market-data
 ```
 
-Both are called by the app and nothing else. `generate-month` and
+All three are called by the app and nothing else. `generate-month` and
 `recalculate-yearly-summary` were removed on 2026-09-19, from the repo and from the deployed
 project: nothing called either of them. `generate-month` was a thin wrapper over
 `create_budgets_with_carryover`, which is still there and can be called directly.
@@ -1342,7 +1411,7 @@ supabase/config.toml
 `delete-account` runs with `verify_jwt = true` since 2026-09-19, so the platform rejects a
 request with no or a malformed token before the function body runs. The function still
 verifies the session itself, because that is what identifies which account to delete;
-neither check replaces the other. `market-data` stays at `false` on purpose: it returns
+neither check replaces the other. `ai-chat` is configured the same way and for the same reason. `market-data` stays at `false` on purpose: it returns
 public index data and touches no table.
 
 **The file is not the switch.** `config.toml` only reaches production through
@@ -1587,6 +1656,40 @@ An older Radix-based toaster also still exists in `src/components/ui/toaster.tsx
 
 ---
 
+## Touch, motion and theme details (2026-11-18)
+
+Found by running the Web Interface Guidelines and the animation review skills over the app.
+
+- **Transitions name their properties.** No `transition-all` and no `transition: all`:
+  it animates things nobody meant to animate, and on the dragged category row it made the
+  row chase the finger. Progress bars use `transition-[width]`, tab and toggle buttons
+  use `transition-[color,background-color,box-shadow]`.
+- **`prefers-reduced-motion`** is handled once, at the end of `index.css`: transitions and
+  animations collapse to 1ms. `animate-spin` and `animate-pulse` are exempt, because they
+  say "working" rather than decorate. The accordion in `Investments.tsx` reads
+  `useReducedMotion()` itself, since framer-motion ignores the CSS rule.
+- **`autoFocus` goes through `autoFocusDesktop()`** (`src/lib/autofocus.ts`). It is true
+  only where the pointer is precise, so a phone does not raise the keyboard the moment a
+  dialog opens.
+- **Hover only where the device can hover.** `hoverOnlyWhenSupported` is on in
+  `tailwind.config.ts`, so a tap no longer leaves a button stuck in its hover colour.
+  Anything that matters on a phone needs a visible rest or `active:` state, not `hover:`.
+- **`color-scheme`** follows the theme (`html` light, `html.dark` dark), so native
+  scrollbars, `<select>` lists and date inputs match. `theme-color` meta tags are in
+  `index.html`. `touch-action: manipulation` is set on everything tappable in `index.css`.
+- **The theme toggle** switches on `resolvedTheme`, not `theme`. With the theme left on
+  "system" and the device in light mode, the first tap used to set "light" again and
+  appear to do nothing. Its accessible name is in Hebrew, and `e2e/settings.spec.ts`
+  looks it up by that name.
+- **The favicon** lives in `public/` (`favicon.ico`, `favicon.png`, `apple-touch-icon.png`),
+  cut from the SF monogram in `public/brand/shilman-finance.png`. It used to be a Lovable
+  default plus a link to Lovable's upload bucket.
+- **The settings e2e tests** that wait for an error message use `.first()`: the same text
+  is shown inline and as a toast, so a bare `getByText` is a strict-mode failure whenever
+  the toast has landed.
+
+---
+
 # Shared Presentation Classes
 
 Reusable visual classes in:
@@ -1738,3 +1841,11 @@ It is valuable when the user can look at the product and quickly understand:
 - and what they should do next.
 
 Financial correctness and clarity are the foundation of the product.
+
+---
+
+## Skills and where they live
+
+- Project skills live in `.claude/skills/` in this folder and load automatically. Relevant here: `deploy`, `db-change`, the Cloudflare/Workers skills (`cloudflare`, `wrangler`, `workers-best-practices`, `durable-objects`, `agents-sdk`, `turnstile-spin` and related), and the design skills (`web-design-guidelines`, `apple-design`, `emil-design-eng`, `review-animations` and the rest of the Emil pack). Cloudflare skills that are not in `.claude/skills/` are in `~/.cursor/skills/`.
+- Any machine, or when this computer is not reachable: read-only copy in GitHub `arielelya/claude-library` under `projects/shilman-cash-flow/` (general skills under `global/skills/`). Accounts per service: `reference/accounts.md` there.
+- This computer is the source of truth. After changing a skill or this file here, push the same change to the repo.
