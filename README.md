@@ -14,6 +14,7 @@ Skills useful in any project. Source: [anthropics/skills](https://github.com/ant
 | xlsx | Excel spreadsheets |
 | frontend-design | Distinctive, non-generic UI design |
 | webapp-testing | Browser automation tests and screenshots (Playwright) |
+| composio-cli | Operating the Composio CLI: find tools, connect accounts, run tools and workflows |
 
 ## reference
 | File | Contents |
