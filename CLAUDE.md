@@ -15,4 +15,6 @@ Skills exist in two places: the user's computer and this repo. The computer is t
 - Typical computer locations: `~/Developer/cash_flow/shilman-cash-flow/.claude/skills/`, `~/.cursor/skills/`, `~/.agents/skills/`, `~/Desktop/VELE/Website/`.
 - Never copy secrets, `.env*` files or local settings into the repo.
 
+Which account belongs to which service (e.g. Composio): `reference/accounts.md`.
+
 Keep this file short: it is loaded in every session. Put long material under `projects/` or `reference/`.

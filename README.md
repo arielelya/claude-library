@@ -15,6 +15,11 @@ Skills useful in any project. Source: [anthropics/skills](https://github.com/ant
 | frontend-design | Distinctive, non-generic UI design |
 | webapp-testing | Browser automation tests and screenshots (Playwright) |
 
+## reference
+| File | Contents |
+|---|---|
+| accounts.md | Which account belongs to which service (identifiers only, no secrets) |
+
 ## projects
 | Project | Contents |
 |---|---|
