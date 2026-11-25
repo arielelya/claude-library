@@ -20,6 +20,21 @@ Skills exist in two places: the user's computer and this repo. The computer is t
 - Typical computer locations: `~/Developer/cash_flow/shilman-cash-flow/.claude/skills/`, `~/.cursor/skills/`, `~/.agents/skills/`, `~/Desktop/VELE/Website/`.
 - Never copy secrets, `.env*` files or local settings into the repo.
 
+## Projects
+
+| Project | What it is | Folder on the computer | Folder in this repo |
+|---|---|---|---|
+| Cash Flow | The Shilman Finance website and app | `~/Developer/cash_flow/shilman-cash-flow` (an older copy is under `~/Desktop/shilman finance/Website/cash_flow`) | `projects/shilman-cash-flow/` |
+| VELE | The VELE Shopify store (velewellness.com), plus brand files and a dashboard | `~/Desktop/VELE/Website` (brand files and `Dashboard` are in `~/Desktop/VELE`) | `projects/vele/` |
+| Shilman content | Skills for Shilman Finance posts and Instagram content, kept in the claude.ai account | none (account skills) | `projects/shilman/skills/` |
+
+## Adding a new skill
+
+1. Install it on the computer first: the project's `.claude/skills/` for a project skill, or `~/.agents/skills/` for a general one.
+2. Copy it to this repo: `projects/<name>/skills/<skill>/` or `global/skills/<skill>/`. Copy the whole folder, but not secrets or local settings.
+3. Add a row for it in `README.md`.
+4. Commit and push to `main`.
+
 Which account belongs to which service (e.g. Composio): `reference/accounts.md`.
 
 Keep this file short: it is loaded in every session. Put long material under `projects/` or `reference/`.
