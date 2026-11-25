@@ -144,3 +144,8 @@ In `docs/` next to this file:
 - `VELE_Shopify_Improvement_Ideas.md`: Nov 8 review and competitor ideas (condensed).
 Only in the claude.ai Project "wellness brand" (not on this computer): `VELE_Visual_Identity.md`, `VELE_Site_Audit.md` (Aug 2026, partly outdated), `VELE_About_Page_Draft.md`, and the PDFs `VELE Brand Foundation`, `VELE Drop 01`, `VELE 1`.
 When documents conflict, the live store and the policy pages win, then Ariel's latest instruction.
+
+## 12. Skills and where they live
+- Project skills go in `.claude/skills/` in this folder (none yet). Useful skills from the library `arielelya/claude-library`: `frontend-design` (in `global/skills/`), `web-design-guidelines` and `webapp-testing` (in `projects/shilman-cash-flow/skills/`).
+- Any machine, or when this computer is not reachable: read-only copy of this file and its docs in GitHub `arielelya/claude-library` under `projects/vele/`. Accounts per service: `reference/accounts.md` there.
+- This computer is the source of truth. After changing a skill or this file here, push the same change to the repo.

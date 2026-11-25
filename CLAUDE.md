@@ -5,6 +5,11 @@ Personal library of reusable Claude skills and project context.
 - `global/skills/` — general skills, relevant in any project.
 - `projects/<name>/` — context (`CLAUDE.md` / `context.md`), scripts and skills for one project only. Read only the folder of the project being worked on.
 
+## When a skill is needed
+
+1. Look for it on the user's computer first: the project's `.claude/skills/`, then `~/.cursor/skills/` and `~/.agents/skills/`.
+2. If the user is not on the computer (it is not reachable), take it from this repo: `projects/<name>/skills/` or `global/skills/`. Read only; do not push from there.
+
 ## Where skills live
 
 Skills exist in two places: the user's computer and this repo. The computer is the source of truth; the repo is a read-only copy for when the computer is not available.
