@@ -19,6 +19,7 @@ Skills useful in any project. Source: [anthropics/skills](https://github.com/ant
 | File | Contents |
 |---|---|
 | accounts.md | Which account belongs to which service (identifiers only, no secrets) |
+| personal-claude-md.md | The personal rules text for `~/.claude/CLAUDE.md` (loads in every Claude Code session) |
 
 ## projects
 | Project | Contents |
